@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useGlobalData } from '../../context/data/DataState';
+import { useNotification } from '../../context/NotificationContext';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebase';
 
@@ -12,11 +13,28 @@ const navItems = [
 ];
 
 export default function DashboardHeader({ activeTab = 'Dashboard' }) {
-    const { user, realtimePrediction, unitRate } = useGlobalData() || {}; // Handle potential context missing
+    const { user, realtimePrediction, kitchen, unitRate } = useGlobalData() || {}; // Handle potential context missing
+    const { notificationsEnabled, toggleNotifications } = useNotification();
     const [hovered, setHovered] = useState(null);
     const [exportDropdown, setExportDropdown] = useState(false);
     const [isHelpOpen, setIsHelpOpen] = useState(false);
     const navigate = useNavigate();
+
+    // Check if real data is being received
+    // Data is considered active if:
+    // 1. Kitchen data has actual power values (RX, TX1, TX2 > 0)
+    // 2. OR realtimePrediction has valid predicted_power
+    const isDataActive = React.useMemo(() => {
+        if (!kitchen) return false;
+        
+        const rxPower = kitchen['Main Receiver (RX)']?.Power || 0;
+        const tx1Power = kitchen['TX1']?.Power || 0;
+        const tx2Power = kitchen['TX2']?.Power || 0;
+        const predictedPower = realtimePrediction?.predicted_power || 0;
+        
+        // Data is active if any sensor has power > 0 or prediction exists with power > 0
+        return (rxPower > 0 || tx1Power > 0 || tx2Power > 0 || predictedPower > 0);
+    }, [kitchen, realtimePrediction]);
 
     const handleLogout = () => {
         signOut(auth).then(() => {
@@ -127,12 +145,34 @@ export default function DashboardHeader({ activeTab = 'Dashboard' }) {
                             <span className="text-xl">❓</span>
                         </button>
 
-                        {/* Notification Bell */}
-                        <button className="p-2 rounded-full bg-green-50 text-green-600 hover:bg-green-100 transition shadow-sm">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
+                        {/* Notification Bell - Interactive Toggle */}
+                        <button
+                            onClick={toggleNotifications}
+                            className={`
+                                p-2 rounded-full transition-all shadow-sm relative
+                                ${notificationsEnabled 
+                                    ? 'bg-green-50 text-green-600 hover:bg-green-100' 
+                                    : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}
+                            `}
+                            title={notificationsEnabled ? 'Notifications enabled' : 'Notifications disabled'}
+                            aria-label={notificationsEnabled ? 'Disable notifications' : 'Enable notifications'}
+                            aria-pressed={notificationsEnabled}
+                        >
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            
+                            {/* Off Badge */}
+                            {!notificationsEnabled && (
+                                <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                                    <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </div>
+                            )}
                         </button>
                         <button className="p-2 rounded-full bg-green-50 text-green-600 hover:bg-green-100 transition shadow-sm">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                         </button>
                     </div>
 
@@ -159,14 +199,14 @@ export default function DashboardHeader({ activeTab = 'Dashboard' }) {
                     {/* Live Status Indicator */}
                     <div className="flex items-center mt-2 space-x-2">
                         <span className={`relative flex h-3 w-3`}>
-                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${realtimePrediction ? 'bg-green-400' : 'bg-red-400'}`}></span>
-                            <span className={`relative inline-flex rounded-full h-3 w-3 ${realtimePrediction ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isDataActive ? 'bg-green-400' : 'bg-red-400'}`}></span>
+                            <span className={`relative inline-flex rounded-full h-3 w-3 ${isDataActive ? 'bg-green-500' : 'bg-red-500'}`}></span>
                         </span>
-                        <span className={`text-xs font-bold tracking-wide uppercase ${realtimePrediction ? 'text-green-600' : 'text-red-500'}`}>
-                            {realtimePrediction ? 'ACTIVE' : 'OFFLINE'}
+                        <span className={`text-xs font-bold tracking-wide uppercase ${isDataActive ? 'text-green-600' : 'text-red-500'}`}>
+                            {isDataActive ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                         <span className="text-xs text-gray-400">
-                            {realtimePrediction ? '— Realtime data updating' : '— No realtime data'}
+                            {isDataActive ? '— Realtime data updating' : '— No realtime data'}
                         </span>
                     </div>
                 </div>

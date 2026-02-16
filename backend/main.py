@@ -225,6 +225,66 @@ def get_device_usage():
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Real-Time Data Endpoint (for offline mode CSV streaming)
+# ═══════════════════════════════════════════════════════════════════════
+
+class RealtimeDataPayload(BaseModel):
+    timestamp: str
+    data: dict
+
+@app.post("/api/realtime/data")
+def receive_realtime_data(payload: RealtimeDataPayload):
+    """
+    Receives real-time per-second data from the offline CSV runner.
+    
+    Used for streaming 24-hour per-second data in offline mode.
+    Updates the latest sensor data which is then used by the frontend.
+    """
+    global latest_sensor_data
+    
+    try:
+        record = payload.data
+        
+        # Parse CSV data into zones format
+        rx_power = float(record.get("RX_kWh", 0)) * 1000  # Convert to watts
+        tx1_power = float(record.get("TX1_kWh", 0)) * 1000
+        tx2_power = float(record.get("TX2_kWh", 0)) * 1000
+        
+        # Update latest sensor data
+        latest_sensor_data = {
+            "zones": {
+                "Main Receiver (RX)": {
+                    "Power": rx_power,
+                    "Status": "ON" if rx_power > 0 else "OFF"
+                },
+                "TX1": {
+                    "Power": tx1_power,
+                    "Status": "ON" if tx1_power > 0 else "OFF"
+                },
+                "TX2": {
+                    "Power": tx2_power,
+                    "Status": "ON" if tx2_power > 0 else "OFF"
+                }
+            },
+            "prediction": {
+                "predicted_power": (rx_power + tx1_power + tx2_power) / 3,
+                "timestamp": payload.timestamp,
+                "anomaly": False
+            },
+            "timestamp": payload.timestamp
+        }
+        
+        return {
+            "status": "success",
+            "message": "Data received",
+            "data_point": record.get("time", "N/A")
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

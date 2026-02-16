@@ -1,9 +1,10 @@
 import React from 'react';
 import { useGlobalData } from '../../context/data/DataState';
+import EquipmentStatusPanel from '../Dashboard/EquipmentStatusPanel';
 
 export default function DeviceA() {
 
-  const { kitchen } = useGlobalData();
+  const { kitchen, systemConfig } = useGlobalData();
 
   function calculateElectricityCost(powerWatt) {
     const powerKW = powerWatt / 1000;
@@ -26,6 +27,9 @@ export default function DeviceA() {
 
   return (
     <div className="space-y-8">
+      {/* Highest Power Consuming Devices */}
+      <EquipmentStatusPanel kitchen={kitchen} systemConfig={systemConfig} />
+
       {/* Zone Data Table */}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">

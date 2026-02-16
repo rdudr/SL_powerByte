@@ -1,15 +1,66 @@
 import React, { useState } from 'react';
 import DashboardHeader from '../Dashboard/DashboardHeader';
 import { useGlobalData } from '../../context/data/DataState';
+import { useNotification } from '../../context/NotificationContext';
+import { useEnergyLossDetection } from '../../hooks/useEnergyLossDetection';
+import RXColumnDisplay from './RXColumnDisplay';
+
+/**
+ * Error Boundary Component for Account
+ * Catches errors in child components and displays fallback UI
+ */
+class AccountErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('[AccountErrorBoundary] Error caught:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-gray-50 p-8 font-sans">
+          <div className="max-w-7xl mx-auto">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+              <h2 className="text-lg font-bold text-red-900 mb-2">Error Loading Account</h2>
+              <p className="text-red-700 mb-4">
+                An error occurred while loading the account section. Please refresh the page or contact support.
+              </p>
+              <details className="text-sm text-red-600">
+                <summary className="cursor-pointer font-medium">Error Details</summary>
+                <pre className="mt-2 bg-red-100 p-2 rounded overflow-auto text-xs">
+                  {this.state.error?.toString()}
+                </pre>
+              </details>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 export default function Account() {
     const { systemConfig, setSystemConfig, kitchen, unitRate, setUnitRate } = useGlobalData();
+    const { addNotification } = useNotification();
     const rxData = systemConfig || {};
     const setRxData = setSystemConfig;
 
     const [tempRate, setTempRate] = useState(unitRate);
     const [editingItem, setEditingItem] = useState(null); // { type: 'TX'|'Device', parentId: ... , item: ... }
     const [isModalOpen, setIsModalOpen] = useState(false);
+
+    // Use energy loss detection hook
+    const { energyLossData, historicalEnergyLoss } = useEnergyLossDetection(rxData, kitchen, addNotification);
 
     // Guard AFTER all hooks
     if (!rxData.id) {
@@ -19,89 +70,110 @@ export default function Account() {
     // --- Actions ---
 
     const handleAddTx = () => {
-        const newTx = {
-            id: `TX-${Date.now()}`,
-            name: 'New Transmitter',
-            type: 'TX',
-            devices: []
-        };
-        setRxData(prev => ({
-            ...prev,
-            txUnits: [...prev.txUnits, newTx]
-        }));
+        try {
+            const newTx = {
+                id: `TX-${Date.now()}`,
+                name: 'New Transmitter',
+                type: 'TX',
+                devices: []
+            };
+            setRxData(prev => ({
+                ...prev,
+                txUnits: [...prev.txUnits, newTx]
+            }));
+        } catch (error) {
+            console.error('[Account] Error adding TX:', error);
+        }
     };
 
     const handleAddDevice = (txId) => {
-        const newDevice = {
-            id: `D-${Date.now()}`,
-            name: 'New Device',
-            type: 'Device',
-            specs: { power: 0, current: 0 }
-        };
-        setRxData(prev => ({
-            ...prev,
-            txUnits: prev.txUnits.map(tx =>
-                tx.id === txId
-                    ? { ...tx, devices: [...tx.devices, newDevice] }
-                    : tx
-            )
-        }));
+        try {
+            const newDevice = {
+                id: `D-${Date.now()}`,
+                name: 'New Device',
+                type: 'Device',
+                specs: { power: 0, current: 0 }
+            };
+            setRxData(prev => ({
+                ...prev,
+                txUnits: prev.txUnits.map(tx =>
+                    tx.id === txId
+                        ? { ...tx, devices: [...tx.devices, newDevice] }
+                        : tx
+                )
+            }));
+        } catch (error) {
+            console.error('[Account] Error adding device:', error);
+        }
     };
 
     const handleEdit = (item, type, parentId = null) => {
-        setEditingItem({ ...item, itemType: type, parentId });
-        setIsModalOpen(true);
+        try {
+            setEditingItem({ ...item, itemType: type, parentId });
+            setIsModalOpen(true);
+        } catch (error) {
+            console.error('[Account] Error opening edit modal:', error);
+        }
     };
 
     const handleSave = (e) => {
-        e.preventDefault();
-        const updatedItem = editingItem;
+        try {
+            e.preventDefault();
+            const updatedItem = editingItem;
 
-        if (updatedItem.itemType === 'RX') {
-            setRxData(prev => ({ ...prev, name: updatedItem.name }));
-        } else if (updatedItem.itemType === 'TX') {
-            setRxData(prev => ({
-                ...prev,
-                txUnits: prev.txUnits.map(tx => tx.id === updatedItem.id ? updatedItem : tx)
-            }));
-        } else if (updatedItem.itemType === 'Device') {
-            setRxData(prev => ({
-                ...prev,
-                txUnits: prev.txUnits.map(tx =>
-                    tx.id === updatedItem.parentId
-                        ? { ...tx, devices: tx.devices.map(d => d.id === updatedItem.id ? updatedItem : d) }
-                        : tx
-                )
-            }));
+            if (updatedItem.itemType === 'RX') {
+                setRxData(prev => ({ ...prev, name: updatedItem.name }));
+            } else if (updatedItem.itemType === 'TX') {
+                setRxData(prev => ({
+                    ...prev,
+                    txUnits: prev.txUnits.map(tx => tx.id === updatedItem.id ? updatedItem : tx)
+                }));
+            } else if (updatedItem.itemType === 'Device') {
+                setRxData(prev => ({
+                    ...prev,
+                    txUnits: prev.txUnits.map(tx =>
+                        tx.id === updatedItem.parentId
+                            ? { ...tx, devices: tx.devices.map(d => d.id === updatedItem.id ? updatedItem : d) }
+                            : tx
+                    )
+                }));
+            }
+            setIsModalOpen(false);
+            setEditingItem(null);
+        } catch (error) {
+            console.error('[Account] Error saving changes:', error);
         }
-        setIsModalOpen(false);
-        setEditingItem(null);
     };
 
     const handleDelete = (item, type, parentId = null) => {
-        if (!window.confirm("Are you sure you want to delete this?")) return;
+        try {
+            if (!window.confirm("Are you sure you want to delete this?")) return;
 
-        if (type === 'TX') {
-            setRxData(prev => ({
-                ...prev,
-                txUnits: prev.txUnits.filter(tx => tx.id !== item.id)
-            }));
-        } else if (type === 'Device') {
-            setRxData(prev => ({
-                ...prev,
-                txUnits: prev.txUnits.map(tx =>
-                    tx.id === parentId
-                        ? { ...tx, devices: tx.devices.filter(d => d.id !== item.id) }
-                        : tx
-                )
-            }));
+            if (type === 'TX') {
+                setRxData(prev => ({
+                    ...prev,
+                    txUnits: prev.txUnits.filter(tx => tx.id !== item.id)
+                }));
+            } else if (type === 'Device') {
+                setRxData(prev => ({
+                    ...prev,
+                    txUnits: prev.txUnits.map(tx =>
+                        tx.id === parentId
+                            ? { ...tx, devices: tx.devices.filter(d => d.id !== item.id) }
+                            : tx
+                    )
+                }));
+            }
+        } catch (error) {
+            console.error('[Account] Error deleting item:', error);
         }
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-8 font-sans">
-            <div className="max-w-7xl mx-auto">
-                <DashboardHeader activeTab="Account" />
+        <AccountErrorBoundary>
+            <div className="min-h-screen bg-gray-50 p-8 font-sans">
+                <div className="max-w-7xl mx-auto">
+                    <DashboardHeader activeTab="Account" />
 
                 <div className="bg-white rounded-3xl p-8 shadow-sm">
                     <div className="flex justify-between items-center mb-8 pb-4 border-b">
@@ -109,12 +181,6 @@ export default function Account() {
                             <h3 className="font-bold text-gray-800 text-lg">{rxData.name || 'System'}</h3>
                             <p className="text-xs text-gray-500">Master Controller</p>
                         </div>
-                        <button
-                            onClick={() => handleEdit(rxData, 'RX')}
-                            className="text-gray-400 hover:text-blue-600 transition-colors bg-white p-2 rounded-xl border border-gray-100 shadow-sm"
-                        >
-                            ✏️ Edit
-                        </button>
                     </div>
 
                     {/* --- NEW: Electricity Tariff Section --- */}
@@ -153,6 +219,17 @@ export default function Account() {
 
             {/* TX Units List */}
             <div className="max-w-7xl mx-auto mt-8 space-y-8">
+                {/* RX Column Display with Energy Loss Information */}
+                <RXColumnDisplay
+                    rxName={rxData.name || 'Main Receiver'}
+                    rxValue={energyLossData.rxValue}
+                    totalConsumption={energyLossData.totalConsumption}
+                    energyDifference={energyLossData.energyDifference}
+                    status={energyLossData.status}
+                    statusColor={energyLossData.statusColor}
+                    onEdit={() => handleEdit(rxData, 'RX')}
+                />
+
                 {rxData.txUnits.map(tx => (
                     <div key={tx.id} className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm bg-white">
                         {/* TX Header */}
@@ -216,6 +293,9 @@ export default function Account() {
                 </div>
             </div>
 
+            {/* Data Mismatch Alert */}
+            {/* Removed - Now using toast notifications instead */}
+
             {/* Edit Modal */}
             {isModalOpen && editingItem && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm">
@@ -276,6 +356,7 @@ export default function Account() {
                     </form>
                 </div>
             )}
-        </div>
+            </div>
+        </AccountErrorBoundary>
     );
 }

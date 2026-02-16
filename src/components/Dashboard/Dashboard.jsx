@@ -1,6 +1,9 @@
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { useGlobalData } from '../../context/data/DataState';
+import { useNotification } from '../../context/NotificationContext';
+import { useEnergyLossDetection } from '../../hooks/useEnergyLossDetection';
+import { useRuntimeTracking } from '../../hooks/useRuntimeTracking';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -18,6 +21,7 @@ import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import DashboardHeader from './DashboardHeader';
 import { RunTimeCard, YellowStatCard } from './StatCards';
 import DeviceList from './DeviceList';
+import EnergyLossGraph from '../Account/EnergyLossGraph';
 
 ChartJS.register(
   CategoryScale,
@@ -41,12 +45,35 @@ export default function Dashboard(props) {
     systemConfig,
     unitRate, // Added unitRate
   } = useGlobalData();
+  const { addNotification } = useNotification();
+
+  // Show loading state while data is being fetched
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 text-lg">Loading Dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Use energy loss detection hook
+  const { energyLossData, historicalEnergyLoss } = useEnergyLossDetection(systemConfig, kitchen, addNotification);
+
+  // Use runtime tracking hook - tracks active/inactive time based on data availability
+  const runtimeStats = useRuntimeTracking(energyLossData.rxValue > 0 || realtimePrediction?.predicted_power > 0);
 
   // --- HISTORICAL DATA STATE ---
   const [historicalDaily, setHistoricalDaily] = React.useState(null);
   const [weeklyData, setWeeklyData] = React.useState(null);
   const [monthlyData, setMonthlyData] = React.useState(null);
 
+  // --- CO PPM HISTORY STATE ---
+  const [coHistory, setCoHistory] = React.useState([]);
+
+  // Load historical data from API
   React.useEffect(() => {
     const API = 'http://localhost:8000';
     Promise.all([
@@ -59,6 +86,21 @@ export default function Dashboard(props) {
       setMonthlyData(monthly);
     });
   }, []);
+
+  // Update CO History when kitchen data changes
+  React.useEffect(() => {
+    if (!kitchen) return;
+
+    const now = new Date().toLocaleTimeString();
+    const tx1_ppm = kitchen.TX1_CO_ppm || 0;
+    const tx2_ppm = kitchen.TX2_CO_ppm || 0;
+
+    setCoHistory(prev => {
+      const newPoint = { time: now, tx1: tx1_ppm, tx2: tx2_ppm };
+      // Keep last 20 points
+      return [...prev, newPoint].slice(-20);
+    });
+  }, [kitchen]);
 
   // ═══════════════════════════════════════════════════════════════
   // CO₂ EMISSION FACTOR — CEA India Grid (Official)
@@ -154,7 +196,7 @@ export default function Dashboard(props) {
   const deviceList = allDevices.length > 0
     ? allDevices.map(device => {
       const liveData = kitchen[device.name];
-      const livePower = liveData?.ActivePower || 0;
+      const livePower = liveData?.ActivePower || liveData?.Power || 0;
       const ratedPower = device.specs.power || 1;
       const isOverloaded = livePower >= ratedPower * 0.9; // ≥90% of rated = overload
 
@@ -169,14 +211,19 @@ export default function Dashboard(props) {
       }
 
       return {
+        id: device.id,
         name: device.name,
+        txName: systemConfig?.txUnits?.find(tx => tx.devices.some(d => d.id === device.id))?.name || 'Unknown',
         power: livePower > 0 ? livePower.toFixed(0) : ratedPower,
+        currentPower: livePower,
+        ratedPower: ratedPower,
         usageTime: liveData?.Status === 'ON' ? 'Active' : 'Idle',
         overloaded: isOverloaded && livePower > 0,
+        isOverloaded: isOverloaded && livePower > 0,
         overloadTime: overloadTime,
       };
     })
-      .sort((a, b) => Number(b.power) - Number(a.power))
+      .sort((a, b) => Number(b.currentPower) - Number(a.currentPower))
       .slice(0, 5)
     : [];
 
@@ -195,15 +242,30 @@ export default function Dashboard(props) {
         {/* 2. Stat Cards Row — Powered by Historical CSV Data */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <RunTimeCard
-            time={realtimePrediction?.timestamp ? new Date(realtimePrediction.timestamp).toLocaleTimeString() : "1M, 2D, 10H"}
+            totalRuntime={runtimeStats.totalRuntime}
+            activeTime={runtimeStats.activeTime}
+            deactiveTime={runtimeStats.deactiveTime}
+            lastActiveTime={runtimeStats.lastActiveTime}
+            lastDeactiveTime={runtimeStats.lastDeactiveTime}
           />
           <YellowStatCard
             value={`${carbonDisplay} CO₂`}
             unit=""
             label="Carbon Emission (CEA 0.716)"
-            subLabel={`${CO2_FACTOR} kg CO₂/kWh × ${totalKwh.toFixed(0)} kWh`}
+            subLabel={`${0.716} kg CO₂/kWh × ${totalKwh.toFixed(0)} kWh`}
             growth={`${carbonGrowthPct > 0 ? '↑' : '↓'} ${Math.abs(carbonGrowthPct)}%`}
             icon="🌿"
+            formulaData={{
+              title: "Carbon Emission Calculation",
+              formula: "CO₂ (kg) = CEA Factor × Total Energy (kWh)",
+              variables: {
+                "CEA Factor": "0.716 kg CO₂/kWh (Central Electricity Authority India 2024)",
+                "Total Energy": `${totalKwh.toFixed(0)} kWh (3 months cumulative)`,
+                "Result": `${totalCarbonKg.toFixed(2)} kg CO₂`
+              },
+              example: `If Total Energy = 1000 kWh\nCO₂ = 0.716 × 1000 = 716 kg CO₂\n\nFor display:\n• If < 1000 kg: Show as "716.0 kg CO₂"\n• If ≥ 1000 kg: Show as "0.72 t CO₂" (tonnes)`,
+              notes: "CEA Factor 0.716 is the weighted average emission factor for the Indian power grid (FY 2023-24). This represents the carbon intensity of electricity generation in India."
+            }}
           />
           <YellowStatCard
             value={`₹${Math.round(totalCost).toLocaleString()}`}
@@ -212,6 +274,18 @@ export default function Dashboard(props) {
             subLabel={`${totalKwh.toFixed(0)} kWh (3 months)`}
             growth={`${costGrowthPct > 0 ? '↑' : '↓'} ${Math.abs(costGrowthPct)}%`}
             icon="💰"
+            formulaData={{
+              title: "Total Cost Calculation",
+              formula: "Total Cost (₹) = Total Energy (kWh) × Unit Rate (₹/kWh)",
+              variables: {
+                "Total Energy": `${totalKwh.toFixed(0)} kWh`,
+                "Unit Rate": `₹${unitRate}/kWh (configurable)`,
+                "Total Cost": `₹${Math.round(totalCost).toLocaleString()}`,
+                "Growth Rate": `${costGrowthPct}% (vs previous month)`
+              },
+              example: `If Total Energy = 1000 kWh and Unit Rate = ₹7.85/kWh\nTotal Cost = 1000 × 7.85 = ₹7,850\n\nGrowth Rate = ((Current - Previous) / Previous) × 100`,
+              notes: "Unit rate can be configured based on your electricity tariff. Growth rate compares current month cost with previous month."
+            }}
           />
           <YellowStatCard
             value={`${energySaved} kWh`}
@@ -220,11 +294,23 @@ export default function Dashboard(props) {
             subLabel="Growth rate"
             growth={`${energySaved > 0 ? '↓' : '↑'} ₹${Math.abs(energySaved * 7).toFixed(0)}`}
             icon="📊"
+            formulaData={{
+              title: "Energy Savings Calculation",
+              formula: "Energy Saved (kWh) = Previous Month kWh - Current Month kWh",
+              variables: {
+                "Previous Month": `${prevMonthKwh.toFixed(0)} kWh`,
+                "Current Month": `${lastMonthKwh.toFixed(0)} kWh`,
+                "Energy Saved": `${energySaved} kWh`,
+                "Cost Savings": `₹${Math.abs(energySaved * unitRate).toFixed(0)}`
+              },
+              example: `If Previous Month = 1200 kWh and Current Month = 1000 kWh\nEnergy Saved = 1200 - 1000 = 200 kWh\nCost Savings = 200 × ₹7.85 = ₹1,570\n\n↓ indicates savings (positive)\n↑ indicates increased consumption (negative)`,
+              notes: "Positive values indicate energy savings. Negative values indicate increased consumption compared to previous month."
+            }}
           />
         </div>
 
         {/* 3. Main Content: Graph + Device List */}
-        <div className="flex flex-col lg:flex-row gap-8">
+        <div className="flex flex-col lg:flex-row gap-8 mb-8">
 
           {/* Left: Prediction Graph */}
           <div className="w-full lg:w-2/3 bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
@@ -275,7 +361,84 @@ export default function Dashboard(props) {
 
         </div>
 
-        {/* 4. Additional Graphs Row — Powered by Historical Data */}
+        {/* 4. Realtime Monitoring Section - 3 Cards */}
+        {/* 4. Realtime Monitoring Section - 2 Cards Horizontally Aligned */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+
+          {/* Realtime CO (PPM) Monitor */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <div className="text-center mb-4">
+              <h3 className="text-lg font-bold text-gray-800">Realtime CO (PPM)</h3>
+              <div className="flex justify-center gap-6 mt-3 text-sm font-bold">
+                <span className="text-red-500">● TX1: {kitchen?.TX1_CO_ppm || 0}</span>
+                <span className="text-blue-500">● TX2: {kitchen?.TX2_CO_ppm || 0}</span>
+              </div>
+            </div>
+            <div className="h-80">
+              <Line
+                data={{
+                  labels: coHistory.map(p => p.time),
+                  datasets: [
+                    {
+                      label: 'TX1 CO (ppm)',
+                      data: coHistory.map(p => p.tx1),
+                      borderColor: '#ef4444',
+                      backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                      fill: true,
+                      tension: 0.4,
+                      pointRadius: 3,
+                      borderWidth: 2
+                    },
+                    {
+                      label: 'TX2 CO (ppm)',
+                      data: coHistory.map(p => p.tx2),
+                      borderColor: '#3b82f6',
+                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      fill: true,
+                      tension: 0.4,
+                      pointRadius: 3,
+                      borderWidth: 2
+                    }
+                  ]
+                }}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: {
+                      position: 'bottom',
+                      labels: {
+                        font: { size: 11 },
+                        boxWidth: 12,
+                        padding: 15,
+                        usePointStyle: true
+                      }
+                    }
+                  },
+                  scales: {
+                    y: {
+                      beginAtZero: true,
+                      grid: { borderDash: [3, 3] },
+                      ticks: { font: { size: 10 } }
+                    },
+                    x: { display: false }
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Energy Loss Trend */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+            <EnergyLossGraph
+              historicalData={historicalEnergyLoss}
+              currentDifference={energyLossData.energyDifference}
+            />
+          </div>
+
+        </div>
+
+        {/* 5. Additional Graphs Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
 
           {/* Voltage Trend Chart */}
@@ -304,7 +467,7 @@ export default function Dashboard(props) {
                   plugins: { legend: { display: false } },
                   scales: {
                     x: { display: false },
-                    y: { grid: { borderDash: [3, 3] }, ticks: { font: { size: 10 } }, suggestedMin: 200, suggestedMax: 250 }
+                    y: { grid: { borderDash: [3, 3] }, ticks: { font: { size: 10 } }, suggestedMin: 210, suggestedMax: 240 }
                   }
                 }}
               />
@@ -312,7 +475,7 @@ export default function Dashboard(props) {
             <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-50">
               <span className="text-xs text-gray-400">Current</span>
               <span className="text-sm font-bold text-amber-600">
-                {(predictionHistory?.length > 0 ? predictionHistory[predictionHistory.length - 1].voltage : 220).toFixed(1)}V
+                {(predictionHistory?.length > 0 ? (predictionHistory[predictionHistory.length - 1].voltage || 220) : 220).toFixed(1)}V
               </span>
             </div>
           </div>
@@ -320,13 +483,13 @@ export default function Dashboard(props) {
           {/* Energy Distribution by Device (Doughnut) */}
           <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 mb-1">Energy Distribution</h3>
-            <p className="text-xs text-gray-400 mb-4">Power share by device (Watts)</p>
+            <p className="text-xs text-gray-400 mb-4">Live Power share by device</p>
             <div className="h-48 flex items-center justify-center">
               <Doughnut
                 data={{
                   labels: allDevices.map(d => d.name),
                   datasets: [{
-                    data: allDevices.map(d => d.specs.power),
+                    data: allDevices.map(d => kitchen[d.name]?.Power || 0),
                     backgroundColor: [
                       '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
                       '#ec4899', '#06b6d4', '#84cc16', '#f97316'
@@ -346,14 +509,14 @@ export default function Dashboard(props) {
               />
             </div>
             <div className="text-center mt-3 pt-3 border-t border-gray-50">
-              <span className="text-xs text-gray-400">Total Installed Capacity: </span>
+              <span className="text-xs text-gray-400">Active Load: </span>
               <span className="text-sm font-bold text-blue-600">
-                {allDevices.reduce((sum, d) => sum + d.specs.power, 0).toLocaleString()}W
+                {allDevices.reduce((sum, d) => sum + (kitchen[d.name]?.Power || 0), 0).toFixed(0)}W
               </span>
             </div>
           </div>
 
-          {/* Weekly Consumption Bar Chart — From API */}
+          {/* Weekly Consumption Bar Chart */}
           <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 mb-1">Weekly Consumption</h3>
             <p className="text-xs text-gray-400 mb-4">Last 7 days actual vs predicted (kWh)</p>
@@ -396,7 +559,7 @@ export default function Dashboard(props) {
 
         </div>
 
-        {/* 5. Monthly Comparison Bar Chart */}
+        {/* 5. Monthly Comparison Charts */}
         {monthlyData && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
@@ -472,11 +635,9 @@ export default function Dashboard(props) {
           </div>
         )}
 
-        <div className="mt-8">
-          <Outlet />
-        </div>
+        <Outlet />
 
       </div>
-    </div>
+    </div >
   );
 }
