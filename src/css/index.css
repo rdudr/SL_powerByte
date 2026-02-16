@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom globals if needed */
+html,
+body {
+  @apply bg-gray-50 text-gray-900;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Retain custom graph styling but use Tailwind where possible */
+.graph-design {
+  @apply text-purple-600 font-mono font-bold;
+}
+
+/* Ensure full height for layout */
+#root {
+  @apply min-h-screen flex flex-col;
+}
