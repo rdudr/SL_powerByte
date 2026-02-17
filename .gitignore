@@ -34,3 +34,18 @@ env/
 .vscode/
 .idea/
 *.swp
+
+# Project Datasets & Generated Files
+*.csv
+!backend/historical_daily_summary.csv
+!backend/historical_data.csv
+powerbyte_xgboost.json
+backend/powerbyte_xgboost.json
+
+# Logs and Status
+git_status.txt
+temp_runner_commands.py
+
+# System
+.kiro/
+
